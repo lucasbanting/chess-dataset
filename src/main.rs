@@ -4,6 +4,7 @@ use shakmaty::{Chess, Color, Position, Role};
 use std::fs;
 use std::io;
 use std::time::Instant;
+use polars_core::prelude::*;
 
 // struct MoveCounter {
 //     moves: usize,
@@ -49,8 +50,8 @@ struct BitBoard {
 
 #[derive(Clone, Debug)]
 struct GameInfo{
-	move_classes: Vec<Nag>,
-    move_class_index: Vec<i32>,
+	move_classes: Vec<u8>,
+    move_class_idx: Vec<i32>,
     evals: Vec<f32>,
     evals_idx: Vec<i32>,
     mate_evals: Vec<i32>,
@@ -202,9 +203,14 @@ impl Visitor for BoardEvaluator {
     }
 
     fn end_game(&mut self) -> Self::Result {
-        GameInfo {
-			move_classes: self.move_classes.clone(),
-			move_class_index: self.move_class_index.clone(),
+		let mut move_classes = Vec::<u8>::new();
+		for nag in &self.move_classes {
+			move_classes.push(nag.0);
+		}
+
+		GameInfo {
+			move_classes: move_classes.clone(),
+			move_class_idx: self.move_class_index.clone(),
 			evals: self.evals.clone(),
 			evals_idx: self.evals_idx.clone(),
 			mate_evals: self.mate_evals.clone(),
@@ -217,9 +223,9 @@ impl Visitor for BoardEvaluator {
 }
 
 fn main() -> io::Result<()> {
-    // let pgn: &str = &fs::read_to_string("../lichess_db_standard_rated_2023-03.pgn")
-    //     .expect("Error reading file");
-    let pgn: &str = &fs::read_to_string("Testgame.pgn").expect("Error reading file");
+    let pgn: &str = &fs::read_to_string("../lichess_db_standard_rated_2023-03.pgn")
+        .expect("Error reading file");
+    // let pgn: &str = &fs::read_to_string("Testgame.pgn").expect("Error reading file");
 
     let mut reader = BufferedReader::new_cursor(&pgn[..]);
 
@@ -230,29 +236,92 @@ fn main() -> io::Result<()> {
     let mut total_count = 0;
 	let mut eval_count = 0;
 
-    while reader.has_more().unwrap() {
+	let mut games = Vec::<GameInfo>::new();
+
+	while reader.has_more().unwrap() {
         let board = reader.read_game(&mut evaluator)?;
 
         let unwrapped_board = board.unwrap();
 
         if unwrapped_board.evals.len() > 0 {
 			eval_count += 1;
-            println!("Board {:?}", unwrapped_board);
+
+			games.push(unwrapped_board);
+
+			if eval_count % 100 == 0 {
+				println!("Eval count {}", eval_count);
+			}
         }
         total_count += 1;
 
-        if total_count > 10000 {
+		
+
+        if total_count > 1000 {
             break;
         }
     }
 
+	// process games into frame
+	let mut move_classes = Vec::<Vec<u8>>::new();
+	let mut move_classes_idx = Vec::<Vec<i32>>::new();
+
+	let mut evals = Vec::<Vec<f32>>::new();
+	let mut evals_idx = Vec::<Vec<i32>>::new();
+
+	let mut mate_evals = Vec::<Vec<i32>>::new();
+	let mut mate_evals_idx = Vec::<Vec<i32>>::new();
+
+	let mut white_elos = Vec::<i32>::new();
+	let mut black_elos = Vec::<i32>::new();
+
+	let mut pawns = Vec::<Vec<u64>>::new();
+	let mut bishops = Vec::<Vec<u64>>::new();
+	let mut knights = Vec::<Vec<u64>>::new();
+	let mut rooks = Vec::<Vec<u64>>::new();
+	let mut queens = Vec::<Vec<u64>>::new();
+	let mut kings = Vec::<Vec<u64>>::new();
+	let mut white = Vec::<Vec<u64>>::new();
+	let mut black = Vec::<Vec<u64>>::new();
+
+	for game in games {
+		move_classes.push(game.move_classes);
+		move_classes_idx.push(game.move_class_idx);
+
+		evals.push(game.evals);
+		evals_idx.push(game.evals_idx);
+
+		mate_evals.push(game.mate_evals);
+		mate_evals_idx.push(game.mate_evals_idx);
+
+		white_elos.push(game.white_elo);
+		black_elos.push(game.black_elo);
+
+		let mut pawn = Vec::<u64>::new();
+		let mut bishop = Vec::<u64>::new();
+		for board in game.bitboards {
+			pawn.push(board.pawn);
+			bishop.push(board.bishop);
+		}
+		pawns.push(pawn);
+		bishops.push(bishop);
+	}
+
+	let frame = df!(
+		"white_elo" => &white_elos,
+		"black_elo" => &black_elos,
+		"evals" => evals
+	);
+
+	println!("{:?}", frame);
+
     let elapsed_time = now.elapsed().as_secs_f64();
 
     println!(
-        "Processed {} games in {} s , {} [boards/s]",
+        "Processed {} games in {} s , {} [boards/s] {} [evaluated boards/s]",
         total_count,
         elapsed_time,
-        f64::from(total_count) / elapsed_time
+        f64::from(total_count) / elapsed_time,
+		f64::from(eval_count) / elapsed_time,
     );
 
     Ok(())
