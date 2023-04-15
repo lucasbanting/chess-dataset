@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 pgn-reader = "0.23.0"
 regex = "1.7.3"
+shakmaty = "0.24.0"
