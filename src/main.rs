@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::time::Instant;
 use polars_core::prelude::*;
+use polars::prelude::ParquetWriter;
 
 // struct MoveCounter {
 //     moves: usize,
@@ -256,7 +257,7 @@ fn main() -> io::Result<()> {
 
 		
 
-        if total_count > 1000 {
+        if total_count > 1000000 {
             break;
         }
     }
@@ -341,7 +342,7 @@ fn main() -> io::Result<()> {
 		games.iter().map(|g| g.bitboards.iter().map(|b| b.black).collect::<Series>()).collect::<Vec<_>>()
 	);
 
-	let df = DataFrame::new(
+	let mut df = DataFrame::new(
 		vec![
 				white_elo,
 				black_elo,
@@ -360,10 +361,11 @@ fn main() -> io::Result<()> {
 				white_mask,
 				black_mask
 			]
-		);
+		).unwrap();
 
-	println!("{:?}", df);
-	
+	let mut file = std::fs::File::create("../BoardInfoFrame.parquet").unwrap();
+	ParquetWriter::new(&mut file).finish(&mut df).unwrap();
+
     let elapsed_time = now.elapsed().as_secs_f64();
 
     println!(
