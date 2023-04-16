@@ -1,8 +1,7 @@
 use pgn_reader::{BufferedReader, Nag, Outcome, RawComment, RawHeader, SanPlus, Skip, Visitor};
 use regex::Regex;
 use shakmaty::{Chess, Color, Position, Role};
-use std::fs;
-use std::io;
+use std::{fs::File, io};
 use std::time::Instant;
 use polars_core::prelude::*;
 use polars::prelude::ParquetWriter;
@@ -233,11 +232,16 @@ impl Visitor for BoardEvaluator {
 }
 
 fn main() -> io::Result<()> {
-    let pgn: &str = &fs::read_to_string("../lichess_db_standard_rated_2023-03.pgn")
-        .expect("Error reading file");
+    // let pgn: &str = &fs::read_to_string("../lichess_db_standard_rated_2023-03.pgn")
+    //     .expect("Error reading file");
     // let pgn: &str = &fs::read_to_string("Testgame.pgn").expect("Error reading file");
+	// let mut reader = BufferedReader::new_cursor(&pgn[..]);
 
-    let mut reader = BufferedReader::new_cursor(&pgn[..]);
+	let file = File::open("../lichess_db_standard_rated_2023-03.pgn.zst").expect("Couldn't file file");
+
+	let uncompressed: Box<dyn io::Read> = Box::new(zstd::Decoder::new(file)?);
+
+    let mut reader = BufferedReader::new(uncompressed);
 
     // let mut counter = MoveCounter::new();
     let mut evaluator = BoardEvaluator::new();
@@ -266,7 +270,7 @@ fn main() -> io::Result<()> {
 
 		
 
-        if total_count > 10000 {
+        if total_count > 100_000_000 {
             break;
         }
     }
@@ -371,9 +375,11 @@ fn main() -> io::Result<()> {
 				black_mask
 			]
 		).unwrap();
-
+	
 	let mut file = std::fs::File::create("../BoardInfoFrameLarge.parquet").unwrap();
 	ParquetWriter::new(&mut file).finish(&mut df).unwrap();
+
+	println!("{}", df);
 
     let elapsed_time = now.elapsed().as_secs_f64();
 
