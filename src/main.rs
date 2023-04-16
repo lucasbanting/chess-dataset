@@ -261,12 +261,108 @@ fn main() -> io::Result<()> {
         }
     }
 
-	let move_classes_series: Series = Series::new(
-        "move_classes",
+	let white_elo = Series::new(
+		"white_elo",
+		games.iter().map(|g| g.white_elo).collect::<Vec<_>>()
+	);
+
+	let black_elo = Series::new(
+		"black_elo",
+		games.iter().map(|g| g.black_elo).collect::<Vec<_>>()
+	);
+
+	let move_class: Series = Series::new(
+        "move_class",
         games.iter().map(|g| g.move_classes.iter().collect::<Series>()).collect::<Vec<_>>()
 	);
 
-	println!("{:>}", move_classes_series);
+	let move_class_idx: Series = Series::new(
+        "move_class_idx",
+        games.iter().map(|g| g.move_class_idx.iter().collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let evals: Series = Series::new(
+        "evals",
+        games.iter().map(|g| g.evals.iter().collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let evals_idx: Series = Series::new(
+        "evals_idx",
+        games.iter().map(|g| g.evals_idx.iter().collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let mate_evals: Series = Series::new(
+        "mate_evals",
+        games.iter().map(|g| g.mate_evals.iter().collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let mate_evals_idx: Series = Series::new(
+        "mate_evals_idx",
+        games.iter().map(|g| g.mate_evals_idx.iter().collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let pawns: Series = Series::new(
+		"pawns",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.pawn).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let bishops: Series = Series::new(
+		"bishops",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.bishop).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let knights: Series = Series::new(
+		"knights",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.knight).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let rooks: Series = Series::new(
+		"rooks",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.rook).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let queens: Series = Series::new(
+		"queens",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.queen).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let kings: Series = Series::new(
+		"kings",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.king).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let white_mask: Series = Series::new(
+		"white_mask",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.white).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let black_mask: Series = Series::new(
+		"black_mask",
+		games.iter().map(|g| g.bitboards.iter().map(|b| b.black).collect::<Series>()).collect::<Vec<_>>()
+	);
+
+	let df = DataFrame::new(
+		vec![
+				white_elo,
+				black_elo,
+				evals,
+				evals_idx,
+				mate_evals,
+				mate_evals_idx,
+				move_class, 
+				move_class_idx,
+				pawns,
+				bishops,
+				knights,
+				rooks,
+				queens,
+				kings,
+				white_mask,
+				black_mask
+			]
+		);
+
+	println!("{:?}", df);
 	
     let elapsed_time = now.elapsed().as_secs_f64();
 
