@@ -261,59 +261,13 @@ fn main() -> io::Result<()> {
         }
     }
 
-	// process games into frame
-	let mut move_classes = Vec::<Vec<u8>>::new();
-	let mut move_classes_idx = Vec::<Vec<i32>>::new();
-
-	let mut evals = Vec::<Vec<f32>>::new();
-	let mut evals_idx = Vec::<Vec<i32>>::new();
-
-	let mut mate_evals = Vec::<Vec<i32>>::new();
-	let mut mate_evals_idx = Vec::<Vec<i32>>::new();
-
-	let mut white_elos = Vec::<i32>::new();
-	let mut black_elos = Vec::<i32>::new();
-
-	let mut pawns = Vec::<Vec<u64>>::new();
-	let mut bishops = Vec::<Vec<u64>>::new();
-	let mut knights = Vec::<Vec<u64>>::new();
-	let mut rooks = Vec::<Vec<u64>>::new();
-	let mut queens = Vec::<Vec<u64>>::new();
-	let mut kings = Vec::<Vec<u64>>::new();
-	let mut white = Vec::<Vec<u64>>::new();
-	let mut black = Vec::<Vec<u64>>::new();
-
-	for game in games {
-		move_classes.push(game.move_classes);
-		move_classes_idx.push(game.move_class_idx);
-
-		evals.push(game.evals);
-		evals_idx.push(game.evals_idx);
-
-		mate_evals.push(game.mate_evals);
-		mate_evals_idx.push(game.mate_evals_idx);
-
-		white_elos.push(game.white_elo);
-		black_elos.push(game.black_elo);
-
-		let mut pawn = Vec::<u64>::new();
-		let mut bishop = Vec::<u64>::new();
-		for board in game.bitboards {
-			pawn.push(board.pawn);
-			bishop.push(board.bishop);
-		}
-		pawns.push(pawn);
-		bishops.push(bishop);
-	}
-
-	let frame = df!(
-		"white_elo" => &white_elos,
-		"black_elo" => &black_elos,
-		"evals" => evals
+	let move_classes_series: Series = Series::new(
+        "move_classes",
+        games.iter().map(|g| g.move_classes.iter().collect::<Series>()).collect::<Vec<_>>()
 	);
 
-	println!("{:?}", frame);
-
+	println!("{:>}", move_classes_series);
+	
     let elapsed_time = now.elapsed().as_secs_f64();
 
     println!(
