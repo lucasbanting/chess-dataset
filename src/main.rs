@@ -6,6 +6,7 @@ use std::io;
 use std::time::Instant;
 use polars_core::prelude::*;
 use polars::prelude::ParquetWriter;
+use lazy_static::lazy_static;
 
 // struct MoveCounter {
 //     moves: usize,
@@ -72,7 +73,7 @@ struct BoardEvaluator {
     mate_evals_idx: Vec<i32>,
     white_elo: i32,
     black_elo: i32,
-    is_blitz: bool,
+    skip: bool,
     index: i32,
     current_pos: Chess,
     bitboards: Vec<BitBoard>,
@@ -89,7 +90,7 @@ impl BoardEvaluator {
             mate_evals_idx: Vec::<i32>::new(),
             white_elo: 0,
             black_elo: 0,
-            is_blitz: false,
+            skip: false,
             index: 0,
             current_pos: Chess::default(),
             bitboards: Vec::<BitBoard>::new(),
@@ -109,7 +110,7 @@ impl Visitor for BoardEvaluator {
         self.mate_evals_idx.clear();
         self.white_elo = 0;
         self.black_elo = 0;
-        self.is_blitz = false;
+        self.skip = false;
         self.index = 0;
         self.current_pos = Chess::default();
         self.bitboards.clear();
@@ -128,8 +129,11 @@ impl Visitor for BoardEvaluator {
             .to_lowercase();
         if header == "event" {
             if value.contains("blitz") {
-                self.is_blitz = true;
+                self.skip = true;
             }
+			else if value.contains("bullet") {
+				self.skip = true;
+			}
         } else if header == "whiteelo" {
             self.white_elo = value.parse::<i32>().unwrap()
         } else if header == "blackelo" {
@@ -166,20 +170,25 @@ impl Visitor for BoardEvaluator {
 
     // skip game if header contained stuff we don't want
     fn end_headers(&mut self) -> Skip {
-        Skip(self.is_blitz)
+        Skip(self.skip)
     }
 
     // for each comment
     fn comment(&mut self, _comment: RawComment<'_>) {
-        let float_eval_regex = Regex::new(r"\[%eval\s(\d+(\.\d+)?)\]").unwrap();
-        let mate_eval_regex = Regex::new(r"\[%eval\s#(\d+)\]").unwrap();
+		lazy_static! {
+			static ref FLOAT_EVAL_REGEX: Regex = Regex::new(r"\[%eval\s(\d+(\.\d+)?)\]").unwrap();
+		}
 
+		lazy_static! {
+			static ref MATE_EVAL_REGEX: Regex = Regex::new(r"\[%eval\s#(\d+)\]").unwrap();
+		}
+        
         let the_comment: String = String::from_utf8(_comment.as_bytes().to_vec())
             .unwrap()
             .to_lowercase();
 
         // for a float eval
-        if let Some(capture) = float_eval_regex.captures(&the_comment) {
+        if let Some(capture) = FLOAT_EVAL_REGEX.captures(&the_comment) {
             let value = capture.get(1).unwrap().as_str();
             let number = value.parse::<f32>().unwrap();
             // println!("The eval value is: {}", number);
@@ -189,7 +198,7 @@ impl Visitor for BoardEvaluator {
         }
 
         // for a mate in x eval
-        if let Some(capture) = mate_eval_regex.captures(&the_comment) {
+        if let Some(capture) = MATE_EVAL_REGEX.captures(&the_comment) {
             let value = capture.get(1).unwrap().as_str();
             let number = value.parse::<i32>().unwrap();
 
@@ -250,14 +259,14 @@ fn main() -> io::Result<()> {
 			games.push(unwrapped_board);
 
 			if eval_count % 100 == 0 {
-				println!("Eval count {}", eval_count);
+				println!("Total processed: {} Eval count: {}", total_count, eval_count);
 			}
         }
         total_count += 1;
 
 		
 
-        if total_count > 1000000 {
+        if total_count > 10000 {
             break;
         }
     }
@@ -363,7 +372,7 @@ fn main() -> io::Result<()> {
 			]
 		).unwrap();
 
-	let mut file = std::fs::File::create("../BoardInfoFrame.parquet").unwrap();
+	let mut file = std::fs::File::create("../BoardInfoFrameLarge.parquet").unwrap();
 	ParquetWriter::new(&mut file).finish(&mut df).unwrap();
 
     let elapsed_time = now.elapsed().as_secs_f64();
