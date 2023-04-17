@@ -175,11 +175,11 @@ impl Visitor for BoardEvaluator {
     // for each comment
     fn comment(&mut self, _comment: RawComment<'_>) {
 		lazy_static! {
-			static ref FLOAT_EVAL_REGEX: Regex = Regex::new(r"\[%eval\s(\d+(\.\d+)?)\]").unwrap();
+			static ref FLOAT_EVAL_REGEX: Regex = Regex::new(r"\[%eval\s(-?\d+(\.\d+)?)\]").unwrap();
 		}
 
 		lazy_static! {
-			static ref MATE_EVAL_REGEX: Regex = Regex::new(r"\[%eval\s#(\d+)\]").unwrap();
+			static ref MATE_EVAL_REGEX: Regex = Regex::new(r"\[%eval\s#(-?\d+)\]").unwrap();
 		}
         
         let the_comment: String = String::from_utf8(_comment.as_bytes().to_vec())
