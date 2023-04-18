@@ -1,6 +1,6 @@
 use pgn_reader::{BufferedReader, Nag, Outcome, RawComment, RawHeader, SanPlus, Skip, Visitor};
 use regex::Regex;
-use shakmaty::{Chess, Color, Position, Role, Board, Square, CastlingSide, EnPassantMode, Piece};
+use shakmaty::{Chess, Color, Position, Board, Square, CastlingSide, EnPassantMode};
 use std::{fs::File, io};
 use std::time::Instant;
 use polars_core::prelude::*;
@@ -79,6 +79,7 @@ fn encode_board(board: &Board, game: &dyn Position) -> EncodedBoard{
 	};
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct BitBoard {
     pawn: u64,
@@ -91,6 +92,7 @@ struct BitBoard {
     black: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct GameInfo{
 	win_chances: Vec<f32>,
@@ -105,6 +107,7 @@ struct GameInfo{
     bitboards: Vec<EncodedBoard>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct BoardEvaluator {
     move_classes: Vec<Nag>,
@@ -122,6 +125,7 @@ struct BoardEvaluator {
     bitboards: Vec<EncodedBoard>,
 }
 
+#[allow(dead_code)]
 impl BoardEvaluator {
     fn new() -> BoardEvaluator {
         BoardEvaluator {
@@ -142,6 +146,7 @@ impl BoardEvaluator {
     }
 }
 
+#[allow(dead_code)]
 impl Visitor for BoardEvaluator {
     type Result = GameInfo;
 
@@ -320,7 +325,7 @@ fn main() -> io::Result<()> {
 
         let unwrapped_board = board.unwrap();
 
-        if unwrapped_board.win_chances.len() > 0 {
+        if (unwrapped_board.win_chances.len() > 0) && (unwrapped_board.win_chances.len() == unwrapped_board.bitboards.len()){
 			eval_count += 1;
 
 			games.push(unwrapped_board);
