@@ -1,41 +1,83 @@
 use pgn_reader::{BufferedReader, Nag, Outcome, RawComment, RawHeader, SanPlus, Skip, Visitor};
 use regex::Regex;
-use shakmaty::{Chess, Color, Position, Role};
+use shakmaty::{Chess, Color, Position, Role, Board, Square, CastlingSide, EnPassantMode, Piece};
 use std::{fs::File, io};
 use std::time::Instant;
 use polars_core::prelude::*;
-use polars::prelude::ParquetWriter;
+use polars_io::prelude::*;
 use lazy_static::lazy_static;
 
-// struct MoveCounter {
-//     moves: usize,
-// }
+fn sigmoid(val: f32) -> f32 {
+	return 1.0 / (1.0 + (-val).exp());
+}
 
-// impl MoveCounter {
-//     fn new() -> MoveCounter {
-//         MoveCounter { moves: 0 }
-//     }
-// }
+#[derive(Clone, Debug)]
+struct EncodedBoard {
+	board: Vec<i8>
+}
 
-// impl Visitor for MoveCounter {
-//     type Result = usize;
+fn encode_board(board: &Board, game: &dyn Position) -> EncodedBoard{
+	let mut board_array = Vec::<i8>::with_capacity(72);
 
-//     fn begin_game(&mut self) {
-//         self.moves = 0;
-//     }
+	for i in 0..64 as u32{
+		let mut val: i8 = 0;
+		
+		if let Some(piece) = board.piece_at(Square::new(i)) {
+			val = piece.role as i8;
+			if piece.color == Color::Black {
+				val = -val;
+			}
+		}
+		
+		board_array.push(val);
+	}
 
-//     fn san(&mut self, _san_plus: SanPlus) {
-//         self.moves += 1;
-//     }
+	// -1 black, +1 white
+	let mut turn: i8 = -1;
+	if game.turn() == Color::White {
+		turn = 1;
+	}
+	board_array.push(turn);
 
-//     fn begin_variation(&mut self) -> Skip {
-//         Skip(true) // stay in the mainline
-//     }
+	// castling
+	let castles = game.castles();
+	let mut white_king_castle: i8 = 0;
+	let mut white_queen_castle: i8 = 0;
+	let mut black_king_castle: i8 = 0;
+	let mut black_queen_castle: i8 = 0;
 
-//     fn end_game(&mut self) -> Self::Result {
-//         self.moves
-//     }
-// }
+	if castles.has(Color::White, CastlingSide::KingSide) {
+		white_king_castle = 1;
+	}
+	if castles.has(Color::White, CastlingSide::QueenSide) {
+		white_queen_castle = 1;
+	}
+	if castles.has(Color::Black, CastlingSide::KingSide) {
+		black_king_castle = 1;
+	}
+	if castles.has(Color::Black, CastlingSide::QueenSide) {
+		black_queen_castle = 1;
+	}
+	board_array.push(white_king_castle);
+	board_array.push(white_queen_castle);
+	board_array.push(black_king_castle);
+	board_array.push(black_queen_castle);
+
+	// ep square
+	let mut ep_square: i8 = 0;
+	if let Some(square) = game.ep_square(EnPassantMode::Legal) {
+		ep_square = square as i8;
+	}
+	board_array.push(ep_square);
+
+	// half move clock
+	board_array.push(game.halfmoves() as i8); // unsafe operation
+	board_array.push(0); // ignore fullmoves as we can just calc after
+	
+	return EncodedBoard{
+		board: board_array.clone()
+	};
+}
 
 #[derive(Clone, Debug)]
 struct BitBoard {
@@ -51,6 +93,7 @@ struct BitBoard {
 
 #[derive(Clone, Debug)]
 struct GameInfo{
+	win_chances: Vec<f32>,
 	move_classes: Vec<u8>,
     move_class_idx: Vec<i32>,
     evals: Vec<f32>,
@@ -59,13 +102,14 @@ struct GameInfo{
     mate_evals_idx: Vec<i32>,
     white_elo: i32,
     black_elo: i32,
-    bitboards: Vec<BitBoard>,
+    bitboards: Vec<EncodedBoard>,
 }
 
 #[derive(Clone, Debug)]
 struct BoardEvaluator {
     move_classes: Vec<Nag>,
     move_class_index: Vec<i32>,
+	win_chances: Vec<f32>,
     evals: Vec<f32>,
     evals_idx: Vec<i32>,
     mate_evals: Vec<i32>,
@@ -75,7 +119,7 @@ struct BoardEvaluator {
     skip: bool,
     index: i32,
     current_pos: Chess,
-    bitboards: Vec<BitBoard>,
+    bitboards: Vec<EncodedBoard>,
 }
 
 impl BoardEvaluator {
@@ -83,6 +127,7 @@ impl BoardEvaluator {
         BoardEvaluator {
             move_classes: Vec::<Nag>::new(),
             move_class_index: Vec::<i32>::new(),
+			win_chances: Vec::<f32>::new(),
             evals: Vec::<f32>::new(),
             evals_idx: Vec::<i32>::new(),
             mate_evals: Vec::<i32>::new(),
@@ -92,7 +137,7 @@ impl BoardEvaluator {
             skip: false,
             index: 0,
             current_pos: Chess::default(),
-            bitboards: Vec::<BitBoard>::new(),
+            bitboards: Vec::<EncodedBoard>::new(),
         }
     }
 }
@@ -113,6 +158,7 @@ impl Visitor for BoardEvaluator {
         self.index = 0;
         self.current_pos = Chess::default();
         self.bitboards.clear();
+		self.win_chances.clear()
     }
 
     fn nag(&mut self, _nag: Nag) {
@@ -148,20 +194,20 @@ impl Visitor for BoardEvaluator {
         if let Ok(m) = san_plus.san.to_move(&self.current_pos) {
             self.current_pos.play_unchecked(&m);
 
-            let (role, colour) = self.current_pos.board().to_owned().into_bitboards();
+            // let (role, colour) = self.current_pos.board().to_owned().into_bitboards();
 
-            let bitboard = BitBoard {
-                pawn: role.get(Role::Pawn).0,
-                bishop: role.get(Role::Bishop).0,
-                knight: role.get(Role::Knight).0,
-                rook: role.get(Role::Rook).0,
-                queen: role.get(Role::Queen).0,
-                king: role.get(Role::King).0,
-                white: colour.get(Color::White).0,
-                black: colour.get(Color::Black).0,
-            };
+            // let bitboard = BitBoard {
+            //     pawn: role.get(Role::Pawn).0,
+            //     bishop: role.get(Role::Bishop).0,
+            //     knight: role.get(Role::Knight).0,
+            //     rook: role.get(Role::Rook).0,
+            //     queen: role.get(Role::Queen).0,
+            //     king: role.get(Role::King).0,
+            //     white: colour.get(Color::White).0,
+            //     black: colour.get(Color::Black).0,
+            // };
 
-            self.bitboards.push(bitboard);
+            self.bitboards.push(encode_board(self.current_pos.board(), &self.current_pos));
         }
     }
 
@@ -192,9 +238,10 @@ impl Visitor for BoardEvaluator {
             let number = value.parse::<f32>().unwrap();
             // println!("The eval value is: {}", number);
 
-            self.evals.push(number);
-            self.evals_idx.push(self.index);
-        }
+            // self.evals.push(number);
+            // self.evals_idx.push(self.index);
+			self.win_chances.push(sigmoid(number));
+        } 
 
         // for a mate in x eval
         if let Some(capture) = MATE_EVAL_REGEX.captures(&the_comment) {
@@ -202,8 +249,14 @@ impl Visitor for BoardEvaluator {
             let number = value.parse::<i32>().unwrap();
 
             // println!("The eval value is: [mate in] {}", number);
-            self.mate_evals.push(number);
-            self.mate_evals_idx.push(self.index);
+            // self.mate_evals.push(number);
+            // self.mate_evals_idx.push(self.index);
+
+			let mut num: f32 = 0.0;
+			if number > 0 {
+				num = 1.0;
+			}
+			self.win_chances.push(num)
         }
     }
 
@@ -220,6 +273,7 @@ impl Visitor for BoardEvaluator {
 		GameInfo {
 			move_classes: move_classes.clone(),
 			move_class_idx: self.move_class_index.clone(),
+			win_chances: self.win_chances.clone(),
 			evals: self.evals.clone(),
 			evals_idx: self.evals_idx.clone(),
 			mate_evals: self.mate_evals.clone(),
@@ -230,6 +284,15 @@ impl Visitor for BoardEvaluator {
 		}
     }
 }
+
+// fn main() -> io::Result<()>{
+// 	let mut file = File::open("test.parquet").expect("Couldn't file file");
+
+// 	let df = ParquetReader::new(&mut file).finish().unwrap();
+// 	println!("{:?}", df[0].to_list());
+
+// 	Ok(())
+// }
 
 fn main() -> io::Result<()> {
     // let pgn: &str = &fs::read_to_string("../lichess_db_standard_rated_2023-03.pgn")
@@ -257,7 +320,7 @@ fn main() -> io::Result<()> {
 
         let unwrapped_board = board.unwrap();
 
-        if unwrapped_board.evals.len() > 0 {
+        if unwrapped_board.win_chances.len() > 0 {
 			eval_count += 1;
 
 			games.push(unwrapped_board);
@@ -270,7 +333,7 @@ fn main() -> io::Result<()> {
 
 		
 
-        if total_count > 100_000_000 {
+        if total_count > 10_000_000 {
             break;
         }
     }
@@ -285,6 +348,11 @@ fn main() -> io::Result<()> {
 		games.iter().map(|g| g.black_elo).collect::<Vec<_>>()
 	);
 
+	let win_chances = Series::new(
+		"win_chances",
+		games.iter().map(|g| g.win_chances.iter().collect::<Series>()).collect::<Vec<_>>()
+	);
+
 	let move_class: Series = Series::new(
         "move_class",
         games.iter().map(|g| g.move_classes.iter().collect::<Series>()).collect::<Vec<_>>()
@@ -295,91 +363,124 @@ fn main() -> io::Result<()> {
         games.iter().map(|g| g.move_class_idx.iter().collect::<Series>()).collect::<Vec<_>>()
 	);
 
-	let evals: Series = Series::new(
-        "evals",
-        games.iter().map(|g| g.evals.iter().collect::<Series>()).collect::<Vec<_>>()
-	);
+	let mut board_lists = Vec::with_capacity(games.len());
 
-	let evals_idx: Series = Series::new(
-        "evals_idx",
-        games.iter().map(|g| g.evals_idx.iter().collect::<Series>()).collect::<Vec<_>>()
-	);
+	for game in games {
+		let mut game_positions = Vec::with_capacity(game.bitboards.len());
 
-	let mate_evals: Series = Series::new(
-        "mate_evals",
-        games.iter().map(|g| g.mate_evals.iter().collect::<Series>()).collect::<Vec<_>>()
-	);
+		for position in game.bitboards {
+			let position_list = Series::new("pos", position.board);
 
-	let mate_evals_idx: Series = Series::new(
-        "mate_evals_idx",
-        games.iter().map(|g| g.mate_evals_idx.iter().collect::<Series>()).collect::<Vec<_>>()
-	);
+			game_positions.push(position_list);
+		}	
+		board_lists.push(Series::new("game", game_positions));
+	}
 
-	let pawns: Series = Series::new(
-		"pawns",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.pawn).collect::<Series>()).collect::<Vec<_>>()
-	);
-
-	let bishops: Series = Series::new(
-		"bishops",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.bishop).collect::<Series>()).collect::<Vec<_>>()
-	);
-
-	let knights: Series = Series::new(
-		"knights",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.knight).collect::<Series>()).collect::<Vec<_>>()
-	);
-
-	let rooks: Series = Series::new(
-		"rooks",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.rook).collect::<Series>()).collect::<Vec<_>>()
-	);
-
-	let queens: Series = Series::new(
-		"queens",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.queen).collect::<Series>()).collect::<Vec<_>>()
-	);
-
-	let kings: Series = Series::new(
-		"kings",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.king).collect::<Series>()).collect::<Vec<_>>()
-	);
-
-	let white_mask: Series = Series::new(
-		"white_mask",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.white).collect::<Series>()).collect::<Vec<_>>()
-	);
-
-	let black_mask: Series = Series::new(
-		"black_mask",
-		games.iter().map(|g| g.bitboards.iter().map(|b| b.black).collect::<Series>()).collect::<Vec<_>>()
-	);
+	let game_series = Series::new("games", board_lists);
 
 	let mut df = DataFrame::new(
 		vec![
 				white_elo,
 				black_elo,
-				evals,
-				evals_idx,
-				mate_evals,
-				mate_evals_idx,
-				move_class, 
-				move_class_idx,
-				pawns,
-				bishops,
-				knights,
-				rooks,
-				queens,
-				kings,
-				white_mask,
-				black_mask
+				win_chances,
+				game_series,
+				move_class,
+				move_class_idx
 			]
 		).unwrap();
 	
-	let mut file = std::fs::File::create("../BoardInfoFrameLarge.parquet").unwrap();
+	let mut file = std::fs::File::create("../BoardInfoFrameMedium.parquet").unwrap();
 	ParquetWriter::new(&mut file).finish(&mut df).unwrap();
 
 	println!("{}", df);
+
+	
+
+	// let evals: Series = Series::new(
+    //     "evals",
+    //     games.iter().map(|g| g.evals.iter().collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let evals_idx: Series = Series::new(
+    //     "evals_idx",
+    //     games.iter().map(|g| g.evals_idx.iter().collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let mate_evals: Series = Series::new(
+    //     "mate_evals",
+    //     games.iter().map(|g| g.mate_evals.iter().collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let mate_evals_idx: Series = Series::new(
+    //     "mate_evals_idx",
+    //     games.iter().map(|g| g.mate_evals_idx.iter().collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let pawns: Series = Series::new(
+	// 	"pawns",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.pawn).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let bishops: Series = Series::new(
+	// 	"bishops",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.bishop).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let knights: Series = Series::new(
+	// 	"knights",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.knight).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let rooks: Series = Series::new(
+	// 	"rooks",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.rook).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let queens: Series = Series::new(
+	// 	"queens",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.queen).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let kings: Series = Series::new(
+	// 	"kings",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.king).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let white_mask: Series = Series::new(
+	// 	"white_mask",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.white).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let black_mask: Series = Series::new(
+	// 	"black_mask",
+	// 	games.iter().map(|g| g.bitboards.iter().map(|b| b.black).collect::<Series>()).collect::<Vec<_>>()
+	// );
+
+	// let mut df = DataFrame::new(
+	// 	vec![
+	// 			white_elo,
+	// 			black_elo,
+	// 			evals,
+	// 			evals_idx,
+	// 			mate_evals,
+	// 			mate_evals_idx,
+	// 			move_class, 
+	// 			move_class_idx,
+	// 			pawns,
+	// 			bishops,
+	// 			knights,
+	// 			rooks,
+	// 			queens,
+	// 			kings,
+	// 			white_mask,
+	// 			black_mask
+	// 		]
+	// 	).unwrap();
+	
+	// let mut file = std::fs::File::create("../BoardInfoFrameLarge.parquet").unwrap();
+	// ParquetWriter::new(&mut file).finish(&mut df).unwrap();
+
+	// println!("{}", df);
 
     let elapsed_time = now.elapsed().as_secs_f64();
 

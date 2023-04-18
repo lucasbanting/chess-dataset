@@ -8,8 +8,9 @@ edition = "2021"
 [dependencies]
 lazy_static = "1.4.0"
 pgn-reader = "0.23.0"
-polars = { version="0.28.0", features = ["dtype-u8", "parquet"]}
+polars = { version="0.28.0", features = ["dtype-u8", "parquet", "dtype-i8"]}
 polars-core = "0.28.0"
+polars-io = "0.28.0"
 regex = "1.7.3"
 shakmaty = "0.24.0"
 zstd = "0.12.3"
